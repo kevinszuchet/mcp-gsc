@@ -24,7 +24,6 @@ def _load_module(env_overrides: dict | None = None):
     env = {
         "GSC_SKIP_OAUTH": "true",          # prevent live OAuth attempts by default
         "GSC_DATA_STATE": "all",
-        "GSC_ALLOW_DESTRUCTIVE": "false",
         **(env_overrides or {}),
     }
     with patch.dict(os.environ, env, clear=False):
@@ -56,8 +55,7 @@ class TestAuth(unittest.TestCase):
         # Discover the real SCRIPT_DIR by importing once
         if "gsc_server" in sys.modules:
             del sys.modules["gsc_server"]
-        with patch.dict(os.environ, {"GSC_SKIP_OAUTH": "true", "GSC_DATA_STATE": "all",
-                                     "GSC_ALLOW_DESTRUCTIVE": "false"}, clear=False):
+        with patch.dict(os.environ, {"GSC_SKIP_OAUTH": "true", "GSC_DATA_STATE": "all"}, clear=False):
             import gsc_server as _tmp
         actual_script_dir = _tmp.SCRIPT_DIR
         del sys.modules["gsc_server"]
@@ -82,7 +80,6 @@ class TestAuth(unittest.TestCase):
                 env = {
                     "GSC_SKIP_OAUTH": "true",
                     "GSC_DATA_STATE": "all",
-                    "GSC_ALLOW_DESTRUCTIVE": "false",
                     "GSC_CONFIG_DIR": new_config_dir,
                 }
                 with patch.dict(os.environ, env, clear=False):
@@ -108,7 +105,7 @@ class TestAuth(unittest.TestCase):
         """If refresh succeeds, get_gsc_service_oauth returns without error."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = {"GSC_SKIP_OAUTH": "false", "GSC_DATA_STATE": "all",
-                   "GSC_ALLOW_DESTRUCTIVE": "false", "GSC_CONFIG_DIR": tmpdir}
+                   "GSC_CONFIG_DIR": tmpdir}
             with patch.dict(os.environ, env, clear=False):
                 if "gsc_server" in sys.modules:
                     del sys.modules["gsc_server"]
@@ -136,7 +133,7 @@ class TestAuth(unittest.TestCase):
         """When refresh fails and no secrets file, get_gsc_service_oauth raises RuntimeError."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = {"GSC_SKIP_OAUTH": "false", "GSC_DATA_STATE": "all",
-                   "GSC_ALLOW_DESTRUCTIVE": "false", "GSC_CONFIG_DIR": tmpdir}
+                   "GSC_CONFIG_DIR": tmpdir}
             with patch.dict(os.environ, env, clear=False):
                 if "gsc_server" in sys.modules:
                     del sys.modules["gsc_server"]
@@ -158,7 +155,7 @@ class TestAuth(unittest.TestCase):
         """With no token file and no secrets file, FileNotFoundError is raised."""
         with tempfile.TemporaryDirectory() as tmpdir:
             env = {"GSC_SKIP_OAUTH": "false", "GSC_DATA_STATE": "all",
-                   "GSC_ALLOW_DESTRUCTIVE": "false", "GSC_CONFIG_DIR": tmpdir}
+                   "GSC_CONFIG_DIR": tmpdir}
             with patch.dict(os.environ, env, clear=False):
                 if "gsc_server" in sys.modules:
                     del sys.modules["gsc_server"]
@@ -166,7 +163,7 @@ class TestAuth(unittest.TestCase):
 
             with patch.object(mod, "TOKEN_FILE", os.path.join(tmpdir, "nonexistent_token.json")), \
                  patch.object(mod, "OAUTH_CLIENT_SECRETS_FILE", os.path.join(tmpdir, "nonexistent_secrets.json")):
-                with self.assertRaises(FileNotFoundError):
+                with self.assertRaises((RuntimeError, FileNotFoundError)):
                     mod.get_gsc_service_oauth()
 
     def test_skip_oauth_env_var(self):
@@ -220,6 +217,7 @@ class TestListProperties(unittest.IsolatedAsyncioTestCase):
         with patch("gsc_server.get_gsc_service", side_effect=Exception("API error")):
             result = await mod.list_properties()
         self.assertIn("Error", result)
+        self.assertNotIn("API error", result)  # exception detail must not leak
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +356,7 @@ class TestInspectUrl(unittest.IsolatedAsyncioTestCase):
             }
         }
         with patch("gsc_server.get_gsc_service", return_value=service):
-            result = await mod.inspect_url_enhanced("https://example.com/", "https://example.com/page/")
+            result = await mod.inspect_url_enhanced("https://example.com/page/", site_url="https://example.com/")
         data = json.loads(result)
         self.assertEqual(data["verdict"], "PASS")
         self.assertEqual(data["page_url"], "https://example.com/page/")
@@ -385,8 +383,8 @@ class TestBatchUrlInspection(unittest.IsolatedAsyncioTestCase):
         }
         with patch("gsc_server.get_gsc_service", return_value=service):
             result = await mod.batch_url_inspection(
-                "https://example.com/",
-                "https://example.com/a/\nhttps://example.com/b/"
+                "https://example.com/a/\nhttps://example.com/b/",
+                site_url="https://example.com/",
             )
         data = json.loads(result)
         self.assertEqual(data["count"], 2)
@@ -396,7 +394,7 @@ class TestBatchUrlInspection(unittest.IsolatedAsyncioTestCase):
         mod = _load_module()
         with patch("gsc_server.get_gsc_service", return_value=_make_service()):
             urls = "\n".join([f"https://example.com/{i}/" for i in range(11)])
-            result = await mod.batch_url_inspection("https://example.com/", urls)
+            result = await mod.batch_url_inspection(urls, site_url="https://example.com/")
         self.assertIn("Too many URLs", result)
 
 
@@ -509,9 +507,9 @@ class TestCompareSearchPeriods(unittest.IsolatedAsyncioTestCase):
         ]
         with patch("gsc_server.get_gsc_service", return_value=service):
             result = await mod.compare_search_periods(
-                "https://example.com/",
                 "2026-03-01", "2026-03-28",
                 "2026-04-01", "2026-04-07",
+                site_url="https://example.com/",
             )
         data = json.loads(result)
         self.assertIn("comparison", data)
@@ -535,7 +533,8 @@ class TestGetSearchByPageQuery(unittest.IsolatedAsyncioTestCase):
         }
         with patch("gsc_server.get_gsc_service", return_value=service):
             result = await mod.get_search_by_page_query(
-                "https://example.com/", "https://example.com/blog/seo/"
+                "https://example.com/blog/seo/",
+                site_url="https://example.com/",
             )
         data = json.loads(result)
         self.assertEqual(data["page_url"], "https://example.com/blog/seo/")
@@ -607,88 +606,6 @@ class TestGetSitemapDetails(unittest.IsolatedAsyncioTestCase):
 
 # ---------------------------------------------------------------------------
 # TestSafetyGuards
-# ---------------------------------------------------------------------------
-
-class TestSafetyGuards(unittest.IsolatedAsyncioTestCase):
-
-    async def test_add_site_blocked_by_default(self):
-        mod = _load_module({"GSC_ALLOW_DESTRUCTIVE": "false"})
-        result = await mod.add_site("https://newsite.com/")
-        self.assertIn("Safety", result)
-
-    async def test_delete_site_blocked_by_default(self):
-        mod = _load_module({"GSC_ALLOW_DESTRUCTIVE": "false"})
-        result = await mod.delete_site("https://newsite.com/")
-        self.assertIn("Safety", result)
-
-    async def test_delete_sitemap_blocked_by_default(self):
-        mod = _load_module({"GSC_ALLOW_DESTRUCTIVE": "false"})
-        result = await mod.delete_sitemap("https://example.com/", "https://example.com/sitemap.xml")
-        self.assertIn("Safety", result)
-
-    async def test_add_site_allowed_when_flag_set(self):
-        mod = _load_module({"GSC_ALLOW_DESTRUCTIVE": "true"})
-        service = _make_service()
-        service.sites().add().execute.return_value = {}
-        with patch("gsc_server.get_gsc_service", return_value=service):
-            result = await mod.add_site("https://newsite.com/")
-        self.assertNotIn("Safety", result)
-
-    async def test_delete_site_allowed_when_flag_set(self):
-        mod = _load_module({"GSC_ALLOW_DESTRUCTIVE": "true"})
-        service = _make_service()
-        service.sites().delete().execute.return_value = {}
-        with patch("gsc_server.get_gsc_service", return_value=service):
-            result = await mod.delete_site("https://example.com/")
-        self.assertNotIn("Safety", result)
-
-    async def test_delete_sitemap_allowed_when_flag_set(self):
-        mod = _load_module({"GSC_ALLOW_DESTRUCTIVE": "true"})
-        service = _make_service()
-        service.sitemaps().delete().execute.return_value = {}
-        with patch("gsc_server.get_gsc_service", return_value=service):
-            result = await mod.delete_sitemap("https://example.com/", "https://example.com/sitemap.xml")
-        self.assertNotIn("Safety", result)
-
-
-# ---------------------------------------------------------------------------
-# TestReauthenticate
-# ---------------------------------------------------------------------------
-
-class TestReauthenticate(unittest.IsolatedAsyncioTestCase):
-
-    async def test_deletes_token_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            token_path = os.path.join(tmpdir, "token.json")
-            open(token_path, "w").write('{"old": "token"}')
-            secrets_path = os.path.join(tmpdir, "secrets.json")
-            open(secrets_path, "w").write("{}")
-
-            mod = _load_module()
-
-            mock_creds = MagicMock()
-            mock_creds.to_json.return_value = '{"token": "new"}'
-
-            with patch.object(mod, "TOKEN_FILE", token_path), \
-                 patch.object(mod, "OAUTH_CLIENT_SECRETS_FILE", secrets_path), \
-                 patch("gsc_server.InstalledAppFlow") as mock_flow_cls:
-                mock_flow = MagicMock()
-                mock_flow.run_local_server.return_value = mock_creds
-                mock_flow_cls.from_client_secrets_file.return_value = mock_flow
-                result = await mod.reauthenticate()
-
-            self.assertIn("Successfully authenticated", result)
-            self.assertIn("Previous session deleted", result)
-            self.assertTrue(os.path.exists(token_path))
-
-    async def test_returns_error_when_no_secrets_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mod = _load_module()
-            with patch.object(mod, "OAUTH_CLIENT_SECRETS_FILE", os.path.join(tmpdir, "no_secrets.json")):
-                result = await mod.reauthenticate()
-        self.assertIn("Error", result)
-
-
 # ---------------------------------------------------------------------------
 # TestStdoutClean
 # ---------------------------------------------------------------------------

@@ -1,11 +1,12 @@
 {
   "mcpServers": {
-    "mcp-search-console": {
+    "gsc": {
       "command": "uvx",
-      "args": ["mcp-search-console"],
+      "args": ["--from", "git+https://github.com/kevinszuchet/mcp-gsc", "mcp-gsc"],
       "env": {
         "GSC_CREDENTIALS_PATH": "",
         "GSC_OAUTH_CLIENT_SECRETS_FILE": "",
+        "GSC_DEFAULT_SITE": "sc-domain:latamcoffeetrip.com",
         "GSC_DATA_STATE": "all"
       }
     }
